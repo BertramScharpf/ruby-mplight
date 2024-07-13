@@ -1,0 +1,123 @@
+#!/usr/bin/env ruby
+
+#
+#  testit  --  Test MPLight
+#
+
+$:.unshift "./lib"
+require "mplight"
+require "mplight/bufferio"
+
+
+class Some
+  attr_reader :i
+  def initialize i
+    @i = i
+  end
+  def == oth ; @i == oth.i ; end
+
+  class <<self
+    def from_mpdata data
+      new *(data.unpack1 "C")
+    end
+  end
+  def to_mpdata
+    [ @i].pack "C"
+  end
+end
+
+class Other
+  def == oth ; true ; end
+
+  class <<self
+    def from_mpdata data
+      data == "x"*50 or raise "Identification failed."
+      new
+    end
+  end
+  def to_mpdata
+    "x"*50
+  end
+end
+
+
+class Types < MPLight::Types
+  include MPLight::Packer
+  include MPLight::Unpacker
+  def initialize
+    super
+    register 1, Some
+    register 2, Other
+  end
+  def init_inout f
+    init_input  f
+    init_output f
+  end
+end
+
+
+OBJS = [
+  Math::PI, Float::INFINITY,
+  "tränenüberströmt", "€ 100,-", "Holleri du dödl di, diri diri dudl dö.",
+  ("äöü".force_encoding "ascii-8bit"),
+  true, false,
+  %w(ant bat cat dog eel fox gnu hen ide jay kea),
+  ["x"], ["x"]*100,
+  { "voc" => "Roger", "gt" => "Pete", "bs" => "John", "dr" => "Keith", },
+  0, 1, 0x1f, 0x20, 0x7f, 0x80, -31, -32, -33, 0xffff, 0x1000, 0x1001,
+  0xffffffff, 0x100000000, 0x100000001,
+  (Some.new 127), Other.new,
+]
+
+
+
+t = Types.new
+
+if $*.delete "-s" then
+  require "socket"
+  class UNIXServer
+    alias accept_orig accept
+    def accept ; a = accept_orig ; yield a ; ensure ; a.close ; end
+  end
+  UNIXServer.open "mplighttest" do |s|
+    s.accept { |a|
+      t.init_inout a
+      OBJS.each do |o|
+        t.put o
+        u = t.get
+        u == o or raise "Didn't work."
+      end
+    }
+  end
+
+elsif $*.delete "-c" then
+  require "socket"
+  begin
+    UNIXSocket.open "mplighttest" do |c|
+      t.init_inout c
+      OBJS.each do |o|
+        u = t.get
+        puts u.inspect
+        t.put o
+      end
+    end
+  ensure
+    File.unlink "mplighttest"
+  end
+
+else
+  t.init_inout MPLight::BufferIO.new
+  OBJS.each do |o|
+    t.put o
+    u = t.get
+    u == o or raise "Didn't work."
+  rescue
+    puts o.inspect
+    puts u.inspect
+    raise
+  end
+
+end
+
+puts "Everthing is fine!"
+
